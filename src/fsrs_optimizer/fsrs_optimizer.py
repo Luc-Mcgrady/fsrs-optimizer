@@ -250,6 +250,7 @@ class BatchDataset(Dataset):
         batch_size: int = 0,
         sort_by_length: bool = True,
         max_seq_len: int = math.inf,
+        device=device,
     ):
         if dataframe.empty:
             raise ValueError("Training data is inadequate.")
