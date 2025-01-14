@@ -66,6 +66,7 @@ DEFAULT_PARAMETER = [
 
 S_MIN = 0.01
 
+device = torch.device("cpu")
 
 DEFAULT_PARAMS_STDDEV_TENSOR = torch.tensor(
     [
@@ -94,9 +95,10 @@ DEFAULT_PARAMS_STDDEV_TENSOR = torch.tensor(
 
 
 class FSRS(nn.Module):
+
     def __init__(self, w: List[float], float_delta_t: bool = False):
         super(FSRS, self).__init__()
-        self.w = nn.Parameter(torch.tensor(w, dtype=torch.float32))
+        self.w = nn.Parameter(torch.tensor(w, dtype=torch.float32, device=device))
         self.float_delta_t = float_delta_t
 
     def stability_after_success(
@@ -150,11 +152,11 @@ class FSRS(nn.Module):
         :return state:
         """
         if torch.equal(state, torch.zeros_like(state)):
-            keys = torch.tensor([1, 2, 3, 4])
+            keys = torch.tensor([1, 2, 3, 4], device=device)
             keys = keys.view(1, -1).expand(X[:, 1].long().size(0), -1)
             index = (X[:, 1].long().unsqueeze(1) == keys).nonzero(as_tuple=True)
             # first learn, init memory states
-            new_s = torch.ones_like(state[:, 0])
+            new_s = torch.ones_like(state[:, 0], device=device)
             new_s[index[0]] = self.w[index[1]]
             new_d = self.init_d(X[:, 1])
             new_d = new_d.clamp(1, 10)
@@ -191,7 +193,7 @@ class FSRS(nn.Module):
         :param inputs: shape[seq_len, batch_size, 2]
         """
         if state is None:
-            state = torch.zeros((inputs.shape[1], 2))
+            state = torch.zeros((inputs.shape[1], 2), device=device)
         outputs = []
         for X in inputs:
             state = self.step(X, state)
@@ -234,7 +236,7 @@ class ParameterClipper:
 def lineToTensor(line: str) -> Tensor:
     ivl = line[0].split(",")
     response = line[1].split(",")
-    tensor = torch.zeros(len(response), 2)
+    tensor = torch.zeros(len(response), 2, device=device)
     for li, response in enumerate(response):
         tensor[li][0] = float(ivl[li])
         tensor[li][1] = int(response)
@@ -248,7 +250,6 @@ class BatchDataset(Dataset):
         batch_size: int = 0,
         sort_by_length: bool = True,
         max_seq_len: int = math.inf,
-        device: str = "cpu",
     ):
         if dataframe.empty:
             raise ValueError("Training data is inadequate.")
@@ -258,17 +259,17 @@ class BatchDataset(Dataset):
             dataframe = dataframe.sort_values(by="seq_len")
         del dataframe["seq_len"]
         self.x_train = pad_sequence(
-            dataframe["tensor"].to_list(), batch_first=True, padding_value=0
-        )
-        self.t_train = torch.tensor(dataframe["delta_t"].values, dtype=torch.float)
-        self.y_train = torch.tensor(dataframe["y"].values, dtype=torch.float)
+            dataframe["tensor"].to_list(), batch_first=True, padding_value=0,
+        ).to(device)
+        self.t_train = torch.tensor(dataframe["delta_t"].values, dtype=torch.float, device=device)
+        self.y_train = torch.tensor(dataframe["y"].values, dtype=torch.float, device=device)
         self.seq_len = torch.tensor(
-            dataframe["tensor"].map(len).values, dtype=torch.long
+            dataframe["tensor"].map(len).values, dtype=torch.long, device=device
         )
         if "weights" in dataframe.columns:
-            self.weights = torch.tensor(dataframe["weights"].values, dtype=torch.float)
+            self.weights = torch.tensor(dataframe["weights"].values, dtype=torch.float, device=device)
         else:
-            self.weights = torch.ones(len(dataframe), dtype=torch.float)
+            self.weights = torch.ones(len(dataframe), dtype=torch.float, device=device)
         length = len(dataframe)
         batch_num, remainder = divmod(length, max(1, batch_size))
         self.batch_num = batch_num + 1 if remainder > 0 else batch_num
@@ -282,11 +283,11 @@ class BatchDataset(Dataset):
                 max_seq_len = max(seq_lens)
                 sequences_truncated = sequences[:, :max_seq_len]
                 self.batches[i] = (
-                    sequences_truncated.transpose(0, 1).to(device),
-                    self.t_train[start_index:end_index].to(device),
-                    self.y_train[start_index:end_index].to(device),
-                    seq_lens.to(device),
-                    self.weights[start_index:end_index].to(device),
+                    sequences_truncated.transpose(0, 1),
+                    self.t_train[start_index:end_index],
+                    self.y_train[start_index:end_index],
+                    seq_lens,
+                    self.weights[start_index:end_index],
                 )
 
     def __getitem__(self, idx):
@@ -337,7 +338,7 @@ class Trainer:
             init_w[17] = 0
             init_w[18] = 0
         self.model = FSRS(init_w, float_delta_t)
-        self.init_w_tensor = torch.tensor(init_w, dtype=torch.float)
+        self.init_w_tensor = torch.tensor(init_w, dtype=torch.float, device=device)
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=lr)
         self.clipper = ParameterClipper()
         self.gamma = gamma
@@ -393,7 +394,7 @@ class Trainer:
                 loss = (self.loss_fn(retentions, labels) * weights).sum()
                 penalty = torch.sum(
                     torch.square(self.model.w - self.init_w_tensor)
-                    / torch.square(DEFAULT_PARAMS_STDDEV_TENSOR)
+                    / torch.square(DEFAULT_PARAMS_STDDEV_TENSOR.to(device))
                 )
                 loss += penalty * self.gamma * real_batch_size / epoch_len
                 loss.backward()
@@ -442,13 +443,13 @@ class Trainer:
                     dataset.weights,
                 )
                 real_batch_size = seq_lens.shape[0]
-                outputs, _ = self.model(sequences.transpose(0, 1))
-                stabilities = outputs[seq_lens - 1, torch.arange(real_batch_size), 0]
+                outputs, _ = self.model(sequences.transpose(0, 1).to(device))
+                stabilities = outputs[seq_lens - 1, torch.arange(real_batch_size, device=device), 0]
                 retentions = power_forgetting_curve(delta_ts, stabilities)
                 loss = (self.loss_fn(retentions, labels) * weights).mean()
                 penalty = torch.sum(
                     torch.square(self.model.w - self.init_w_tensor)
-                    / torch.square(DEFAULT_PARAMS_STDDEV_TENSOR)
+                    / torch.square(DEFAULT_PARAMS_STDDEV_TENSOR.to(device=device))
                 )
                 loss += penalty * self.gamma / len(self.train_set.y_train)
                 losses.append(loss)
@@ -497,7 +498,7 @@ class Collection:
         with torch.no_grad():
             outputs, _ = self.model(fast_dataset.x_train.transpose(0, 1))
             stabilities, difficulties = outputs[
-                fast_dataset.seq_len - 1, torch.arange(len(fast_dataset))
+                fast_dataset.seq_len - 1, torch.arange(len(fast_dataset), device=device)
             ].transpose(0, 1)
             return stabilities.tolist(), difficulties.tolist()
 
