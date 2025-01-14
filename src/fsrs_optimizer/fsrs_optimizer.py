@@ -160,17 +160,22 @@ class FSRS(nn.Module):
             new_d = new_d.clamp(1, 10)
         else:
             r = power_forgetting_curve(X[:, 0], state[:, 0])
+            done = X[:, 1] == 0
             short_term = X[:, 0] < 1
             success = X[:, 1] > 1
             new_s = (
                 torch.where(
-                    short_term,
-                    self.stability_short_term(state, X[:, 1]),
+                    done,
+                    state[:, 0],
                     torch.where(
-                        success,
-                        self.stability_after_success(state, r, X[:, 1]),
-                        self.stability_after_failure(state, r),
-                    ),
+                        short_term,
+                        self.stability_short_term(state, X[:, 1]),
+                        torch.where(
+                            success,
+                            self.stability_after_success(state, r, X[:, 1]),
+                            self.stability_after_failure(state, r),
+                        ),
+                    )
                 )
                 if not self.float_delta_t
                 else torch.where(
@@ -179,7 +184,7 @@ class FSRS(nn.Module):
                     self.stability_after_failure(state, r),
                 )
             )
-            new_d = self.next_d(state, X[:, 1])
+            new_d = torch.where(done, state[:, 1], self.next_d(state, X[:, 1]))
             new_d = new_d.clamp(1, 10)
         new_s = new_s.clamp(S_MIN, 36500)
         return torch.stack([new_s, new_d], dim=1)
