@@ -178,10 +178,14 @@ class FSRS(nn.Module):
                     )
                 )
                 if not self.float_delta_t
-                else torch.where(
-                    success,
-                    self.stability_after_success(state, r, X[:, 1]),
-                    self.stability_after_failure(state, r),
+                else 
+                torch.where(
+                    done,
+                    state[:, 0],torch.where(
+                        success,
+                        self.stability_after_success(state, r, X[:, 1]),
+                        self.stability_after_failure(state, r),
+                    )
                 )
             )
             new_d = torch.where(done, state[:, 1], self.next_d(state, X[:, 1]))
