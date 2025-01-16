@@ -66,8 +66,6 @@ DEFAULT_PARAMETER = [
 
 S_MIN = 0.01
 
-device = torch.device("cpu")
-
 DEFAULT_PARAMS_STDDEV_TENSOR = torch.tensor(
     [
         6.61,
@@ -96,9 +94,10 @@ DEFAULT_PARAMS_STDDEV_TENSOR = torch.tensor(
 
 class FSRS(nn.Module):
 
-    def __init__(self, w: List[float], float_delta_t: bool = False):
+    def __init__(self, w: List[float], float_delta_t: bool = False, device="cpu"):
         super(FSRS, self).__init__()
         self.w = nn.Parameter(torch.tensor(w, dtype=torch.float32, device=device))
+        self.device = device
         self.float_delta_t = float_delta_t
 
     def stability_after_success(
@@ -152,11 +151,11 @@ class FSRS(nn.Module):
         :return state:
         """
         if torch.equal(state, torch.zeros_like(state)):
-            keys = torch.tensor([1, 2, 3, 4], device=device)
+            keys = torch.tensor([1, 2, 3, 4], device=self.device)
             keys = keys.view(1, -1).expand(X[:, 1].long().size(0), -1)
             index = (X[:, 1].long().unsqueeze(1) == keys).nonzero(as_tuple=True)
             # first learn, init memory states
-            new_s = torch.ones_like(state[:, 0], device=device)
+            new_s = torch.ones_like(state[:, 0], device=self.device)
             new_s[index[0]] = self.w[index[1]]
             new_d = self.init_d(X[:, 1])
             new_d = new_d.clamp(1, 10)
@@ -193,7 +192,7 @@ class FSRS(nn.Module):
         :param inputs: shape[seq_len, batch_size, 2]
         """
         if state is None:
-            state = torch.zeros((inputs.shape[1], 2), device=device)
+            state = torch.zeros((inputs.shape[1], 2), device=self.device)
         outputs = []
         for X in inputs:
             state = self.step(X, state)
@@ -233,7 +232,7 @@ class ParameterClipper:
             module.w.data = w
 
 
-def lineToTensor(line: str) -> Tensor:
+def lineToTensor(line: str, device) -> Tensor:
     ivl = line[0].split(",")
     response = line[1].split(",")
     tensor = torch.zeros(len(response), 2, device=device)
@@ -250,7 +249,7 @@ class BatchDataset(Dataset):
         batch_size: int = 0,
         sort_by_length: bool = True,
         max_seq_len: int = math.inf,
-        device=device,
+        device="cpu",
     ):
         if dataframe.empty:
             raise ValueError("Training data is inadequate.")
@@ -334,11 +333,13 @@ class Trainer:
         max_seq_len: int = 64,
         float_delta_t: bool = False,
         enable_short_term: bool = True,
+        device = "cpu",
     ) -> None:
         if not enable_short_term:
             init_w[17] = 0
             init_w[18] = 0
-        self.model = FSRS(init_w, float_delta_t)
+        self.device = device
+        self.model = FSRS(init_w, float_delta_t, device=device)
         self.init_w_tensor = torch.tensor(init_w, dtype=torch.float, device=device)
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=lr)
         self.clipper = ParameterClipper()
@@ -359,7 +360,7 @@ class Trainer:
 
     def build_dataset(self, train_set: pd.DataFrame, test_set: Optional[pd.DataFrame]):
         self.train_set = BatchDataset(
-            train_set, batch_size=self.batch_size, max_seq_len=self.max_seq_len
+            train_set, batch_size=self.batch_size, max_seq_len=self.max_seq_len, device=self.device
         )
         self.train_data_loader = BatchLoader(self.train_set)
 
@@ -367,7 +368,7 @@ class Trainer:
             []
             if test_set is None
             else BatchDataset(
-                test_set, batch_size=self.batch_size, max_seq_len=self.max_seq_len
+                test_set, batch_size=self.batch_size, max_seq_len=self.max_seq_len, device=self.device
             )
         )
 
@@ -395,7 +396,7 @@ class Trainer:
                 loss = (self.loss_fn(retentions, labels) * weights).sum()
                 penalty = torch.sum(
                     torch.square(self.model.w - self.init_w_tensor)
-                    / torch.square(DEFAULT_PARAMS_STDDEV_TENSOR.to(device))
+                    / torch.square(DEFAULT_PARAMS_STDDEV_TENSOR.to(self.device))
                 )
                 loss += penalty * self.gamma * real_batch_size / epoch_len
                 loss.backward()
@@ -444,13 +445,13 @@ class Trainer:
                     dataset.weights,
                 )
                 real_batch_size = seq_lens.shape[0]
-                outputs, _ = self.model(sequences.transpose(0, 1).to(device))
-                stabilities = outputs[seq_lens - 1, torch.arange(real_batch_size, device=device), 0]
+                outputs, _ = self.model(sequences.transpose(0, 1))
+                stabilities = outputs[seq_lens - 1, torch.arange(real_batch_size, device=self.device), 0]
                 retentions = power_forgetting_curve(delta_ts, stabilities)
                 loss = (self.loss_fn(retentions, labels) * weights).mean()
                 penalty = torch.sum(
                     torch.square(self.model.w - self.init_w_tensor)
-                    / torch.square(DEFAULT_PARAMS_STDDEV_TENSOR.to(device=device))
+                    / torch.square(DEFAULT_PARAMS_STDDEV_TENSOR.to(device=self.device))
                 )
                 loss += penalty * self.gamma / len(self.train_set.y_train)
                 losses.append(loss)
@@ -482,14 +483,15 @@ class Trainer:
 
 
 class Collection:
-    def __init__(self, w: List[float], float_delta_t: bool = False) -> None:
-        self.model = FSRS(w, float_delta_t)
+    def __init__(self, w: List[float], float_delta_t: bool = False, device = torch.device("cpu")) -> None:
+        self.model = FSRS(w, float_delta_t, device)
+        self.device = device
         self.model.eval()
 
     def predict(self, t_history: str, r_history: str):
         with torch.no_grad():
             line_tensor = lineToTensor(
-                list(zip([t_history], [r_history]))[0]
+                list(zip([t_history], [r_history]))[0], self.device
             ).unsqueeze(1)
             output_t = self.model(line_tensor)
             return output_t[-1][0]
@@ -499,7 +501,7 @@ class Collection:
         with torch.no_grad():
             outputs, _ = self.model(fast_dataset.x_train.transpose(0, 1))
             stabilities, difficulties = outputs[
-                fast_dataset.seq_len - 1, torch.arange(len(fast_dataset), device=device)
+                fast_dataset.seq_len - 1, torch.arange(len(fast_dataset), device=self.device)
             ].transpose(0, 1)
             return stabilities.tolist(), difficulties.tolist()
 
@@ -562,7 +564,7 @@ class Optimizer:
     enable_short_term: bool = True
 
     def __init__(
-        self, float_delta_t: bool = False, enable_short_term: bool = True
+        self, float_delta_t: bool = False, enable_short_term: bool = True, device = torch.device("cpu")
     ) -> None:
         tqdm.pandas()
         self.float_delta_t = float_delta_t
@@ -1305,7 +1307,7 @@ class Optimizer:
         return plots
 
     def preview(self, requestRetention: float, verbose=False, n_steps=3):
-        my_collection = Collection(self.w, self.float_delta_t)
+        my_collection = Collection(self.w, self.float_delta_t, self.device)
         preview_text = "1:again, 2:hard, 3:good, 4:easy\n"
         n_learning_steps = n_steps if not self.float_delta_t else 0
         for first_rating in (1, 2, 3, 4):
@@ -1393,7 +1395,7 @@ class Optimizer:
         return preview_text
 
     def preview_sequence(self, test_rating_sequence: str, requestRetention: float):
-        my_collection = Collection(self.w, self.float_delta_t)
+        my_collection = Collection(self.w, self.float_delta_t, self.device)
 
         t_history = "0"
         d_history = "0"
