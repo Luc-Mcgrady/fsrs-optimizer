@@ -564,7 +564,7 @@ class Optimizer:
     enable_short_term: bool = True
 
     def __init__(
-        self, float_delta_t: bool = False, enable_short_term: bool = True, device = torch.device("cpu")
+        self, float_delta_t: bool = False, enable_short_term: bool = True
     ) -> None:
         tqdm.pandas()
         self.float_delta_t = float_delta_t
