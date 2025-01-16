@@ -269,37 +269,35 @@ class BatchDataset(Dataset):
             self.weights = torch.tensor(dataframe["weights"].values, dtype=torch.float)
         else:
             self.weights = torch.ones(len(dataframe), dtype=torch.float)
-        length = len(dataframe)
-        batch_num, remainder = divmod(length, max(1, batch_size))
-        self.batch_num = batch_num + 1 if remainder > 0 else batch_num
-        self.batches = [None] * self.batch_num
-        if batch_size > 0:
-            for i in range(self.batch_num):
-                start_index = i * batch_size
-                end_index = min((i + 1) * batch_size, length)
-                sequences = self.x_train[start_index:end_index]
-                seq_lens = self.seq_len[start_index:end_index]
-                max_seq_len = max(seq_lens)
-                sequences_truncated = sequences[:, :max_seq_len]
-                self.batches[i] = (
-                    sequences_truncated.transpose(0, 1).to(device),
-                    self.t_train[start_index:end_index].to(device),
-                    self.y_train[start_index:end_index].to(device),
-                    seq_lens.to(device),
-                    self.weights[start_index:end_index].to(device),
-                )
+        self.length = len(dataframe)
+        self.batch_size = batch_size
+        self.device = device
 
-    def __getitem__(self, idx):
-        return self.batches[idx]
+    def __getitem__(self, i):
+        start_index = i * self.batch_size
+        end_index = min((i + 1) * self.batch_size, self.length)
+        sequences = self.x_train[start_index:end_index]
+        seq_lens = self.seq_len[start_index:end_index]
+        max_seq_len = max(seq_lens)
+        sequences_truncated = sequences[:, :max_seq_len]
+        return (
+            sequences_truncated.transpose(0, 1).to(self.device),
+            self.t_train[start_index:end_index].to(self.device),
+            self.y_train[start_index:end_index].to(self.device),
+            seq_lens.to(self.device),
+            self.weights[start_index:end_index].to(self.device),
+        )
 
     def __len__(self):
-        return self.batch_num
+        batch_num, remainder = divmod(self.length, max(1, self.batch_size))
+        batch_num = batch_num + 1 if remainder > 0 else batch_num
+        return batch_num
 
 
 class BatchLoader:
     def __init__(self, dataset: BatchDataset, shuffle: bool = True, seed: int = 2023):
         self.dataset = dataset
-        self.batch_nums = len(dataset.batches)
+        self.batch_nums = len(dataset)
         self.shuffle = shuffle
         self.generator = torch.Generator()
         self.generator.manual_seed(seed)
