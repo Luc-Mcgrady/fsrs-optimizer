@@ -262,9 +262,7 @@ class BatchDataset(Dataset):
         ]
         if sort_by_length:
             dataframe = dataframe.sort_values(by="seq_len")
-        self.seq_len = torch.tensor(
-            [tensor.shape[0] for tensor in self.x_train], dtype=torch.long
-        )
+        self.seq_len = torch.tensor(dataframe["seq_len"].to_list(), dtype=torch.long)
         self.x_train = pad_sequence(self.x_train, batch_first=True, padding_value=0)
         self.t_train = torch.tensor(dataframe["delta_t"].values, dtype=torch.float)
         self.y_train = torch.tensor(dataframe["y"].values, dtype=torch.float)
