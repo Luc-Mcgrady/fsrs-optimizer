@@ -252,24 +252,27 @@ class BatchDataset(Dataset):
     ):
         if dataframe.empty:
             raise ValueError("Training data is inadequate.")
-        dataframe["seq_len"] = dataframe["tensor"].map(len)
+        dataframe["seq_len"] = [len(t_history) for t_history in dataframe["t_history"]]
         dataframe = dataframe[dataframe["seq_len"] <= max_seq_len]
+        self.x_train = [
+            torch.tensor((t_sublist, r_sublist)).transpose(0, 1)
+            for t_sublist, r_sublist in zip(
+                dataframe["t_history"], dataframe["r_history"]
+            )
+        ]
         if sort_by_length:
             dataframe = dataframe.sort_values(by="seq_len")
-        del dataframe["seq_len"]
-        self.x_train = pad_sequence(
-            dataframe["tensor"].to_list(), batch_first=True, padding_value=0
+        self.seq_len = torch.tensor(
+            [tensor.shape[0] for tensor in self.x_train], dtype=torch.long
         )
+        self.x_train = pad_sequence(self.x_train, batch_first=True, padding_value=0)
         self.t_train = torch.tensor(dataframe["delta_t"].values, dtype=torch.float)
         self.y_train = torch.tensor(dataframe["y"].values, dtype=torch.float)
-        self.seq_len = torch.tensor(
-            dataframe["tensor"].map(len).values, dtype=torch.long
-        )
         if "weights" in dataframe.columns:
             self.weights = torch.tensor(dataframe["weights"].values, dtype=torch.float)
         else:
             self.weights = torch.ones(len(dataframe), dtype=torch.float)
-        length = len(dataframe)
+        length = len(self.y_train)
         batch_num, remainder = divmod(length, max(1, batch_size))
         self.batch_num = batch_num + 1 if remainder > 0 else batch_num
         self.batches = [None] * self.batch_num
@@ -280,14 +283,16 @@ class BatchDataset(Dataset):
                 sequences = self.x_train[start_index:end_index]
                 seq_lens = self.seq_len[start_index:end_index]
                 max_seq_len = max(seq_lens)
-                sequences_truncated = sequences[:, :max_seq_len]
+                sequences_truncated = sequences[:, :max_seq_len].transpose(0, 1)
+
                 self.batches[i] = (
-                    sequences_truncated.transpose(0, 1).to(device),
+                    sequences_truncated.to(device),
                     self.t_train[start_index:end_index].to(device),
                     self.y_train[start_index:end_index].to(device),
                     seq_lens.to(device),
                     self.weights[start_index:end_index].to(device),
                 )
+
 
     def __getitem__(self, idx):
         return self.batches[idx]
@@ -896,8 +901,8 @@ class Optimizer:
         df["review_rating"] = df["review_rating"].astype(int)
         df["delta_t"] = df["delta_t"].astype(float if self.float_delta_t else int)
         df["i"] = df["i"].astype(int)
-        df["t_history"] = df["t_history"].astype(str)
-        df["r_history"] = df["r_history"].astype(str)
+        # df["t_history"] = df["t_history"]
+        # df["r_history"] = df["r_history"]
         df["last_rating"] = df["last_rating"].astype(int)
         df["y"] = df["y"].astype(int)
 
@@ -1041,9 +1046,9 @@ class Optimizer:
             )
         else:
             self.dataset = dataset
-            self.dataset["first_rating"] = self.dataset["r_history"].map(
-                lambda x: x[0] if len(x) > 0 else ""
-            )
+            # self.dataset["first_rating"] = self.dataset["r_history"].map(
+            #    lambda x: x[0] if len(x) > 0 else None
+            # )
             self.S0_dataset_group = (
                 self.dataset[self.dataset["i"] == 2]
                 .groupby(by=["first_rating", "delta_t"], group_keys=False)
@@ -1362,7 +1367,7 @@ class Optimizer:
                         )
                         for ivl in map(
                             int if not self.float_delta_t else float,
-                            t_history.split(","),
+                            t_history,
                         )
                     ]
                 )
@@ -1379,8 +1384,8 @@ class Optimizer:
                             else "0.0"
                         )
                         for ivl, pre_ivl in zip(
-                            t_history.split(",")[1:],
-                            t_history.split(",")[:-1],
+                            t_history[1:],
+                            t_history[:-1],
                         )
                     ]
                 )
@@ -1422,7 +1427,7 @@ class Optimizer:
                     )
                     for ivl in map(
                         int if not self.float_delta_t else float,
-                        t_history.split(","),
+                        t_history,
                     )
                 ]
             )
@@ -1435,8 +1440,8 @@ class Optimizer:
                 + [
                     f"{float(ivl) / float(pre_ivl):.2f}" if pre_ivl != "0" else "0.0"
                     for ivl, pre_ivl in zip(
-                        t_history.split(",")[1:],
-                        t_history.split(",")[:-1],
+                        t_history[1:],
+                        t_history[:-1],
                     )
                 ]
             )
@@ -2145,7 +2150,7 @@ def rmse_matrix(df):
 
     def count_lapse(r_history, t_history):
         lapse = 0
-        for r, t in zip(r_history.split(","), t_history.split(",")):
+        for r, t in zip(r_history, t_history):
             if t != "0" and r == "1":
                 lapse += 1
         return lapse
@@ -2180,7 +2185,7 @@ def wrap_short_term_ratings(r_history, t_history):
     result = []
     in_zero_sequence = False
 
-    for t, r in zip(t_history.split(","), r_history.split(",")):
+    for t, r in zip(t_history, r_history.split(",")):
         if t in ("-1", "0"):
             if not in_zero_sequence:
                 result.append("(")
