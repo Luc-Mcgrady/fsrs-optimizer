@@ -1050,6 +1050,7 @@ class Optimizer:
             )
         else:
             self.dataset = dataset
+            self.dataset["r_history"] = self.dataset["r_history"].fillna("")
             self.dataset["first_rating"] = self.dataset["r_history"].map(
                 lambda x: x[0] if len(x) > 0 else ""
             )
@@ -1241,6 +1242,7 @@ class Optimizer:
         self,
         lr: float = 4e-2,
         n_epoch: int = 5,
+        gamma: float = 1.0,
         batch_size: int = 512,
         verbose: bool = True,
         split_by_time: bool = False,
@@ -1271,6 +1273,7 @@ class Optimizer:
                     self.init_w,
                     n_epoch=n_epoch,
                     lr=lr,
+                    gamma=gamma,
                     batch_size=batch_size,
                     float_delta_t=self.float_delta_t,
                     enable_short_term=self.enable_short_term,
@@ -1295,6 +1298,7 @@ class Optimizer:
                 self.init_w,
                 n_epoch=n_epoch,
                 lr=lr,
+                gamma=gamma,
                 batch_size=batch_size,
                 float_delta_t=self.float_delta_t,
                 enable_short_term=self.enable_short_term,
