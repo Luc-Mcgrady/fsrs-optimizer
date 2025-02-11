@@ -149,38 +149,43 @@ class FSRS(nn.Module):
         :param state: shape[batch_size, 2], state[:,0] is stability, state[:,1] is difficulty
         :return state:
         """
-        if torch.equal(state, torch.zeros_like(state)):
-            keys = torch.tensor([1, 2, 3, 4])
-            keys = keys.view(1, -1).expand(X[:, 1].long().size(0), -1)
-            index = (X[:, 1].long().unsqueeze(1) == keys).nonzero(as_tuple=True)
-            # first learn, init memory states
-            new_s = torch.ones_like(state[:, 0])
-            new_s[index[0]] = self.w[index[1]]
-            new_d = self.init_d(X[:, 1])
-            new_d = new_d.clamp(1, 10)
-        else:
-            r = power_forgetting_curve(X[:, 0], state[:, 0])
-            short_term = X[:, 0] < 1
-            success = X[:, 1] > 1
-            new_s = (
+        r = power_forgetting_curve(X[:, 0], state[:, 0])
+        short_term = X[:, 0] < 1
+        success = X[:, 1] > 1
+        new_s = (
+            torch.where(
+                short_term,
+                self.stability_short_term(state, X[:, 1]),
                 torch.where(
-                    short_term,
-                    self.stability_short_term(state, X[:, 1]),
-                    torch.where(
-                        success,
-                        self.stability_after_success(state, r, X[:, 1]),
-                        self.stability_after_failure(state, r),
-                    ),
-                )
-                if not self.float_delta_t
-                else torch.where(
                     success,
                     self.stability_after_success(state, r, X[:, 1]),
                     self.stability_after_failure(state, r),
-                )
+                ),
             )
-            new_d = self.next_d(state, X[:, 1])
-            new_d = new_d.clamp(1, 10)
+            if not self.float_delta_t
+            else torch.where(
+                success,
+                self.stability_after_success(state, r, X[:, 1]),
+                self.stability_after_failure(state, r),
+            )
+        )
+        new_d = self.next_d(state, X[:, 1])
+        new_d = new_d.clamp(1, 10)
+        new_s = new_s.clamp(S_MIN, 36500)
+        return torch.stack([new_s, new_d], dim=1)
+
+    def new_state(self, inputs: Tensor):
+        X = inputs[0]
+        state = torch.zeros((inputs.shape[1], 2))
+        keys = torch.tensor([1, 2, 3, 4])
+        keys = keys.view(1, -1).expand(X[:, 1].long().size(0), -1)
+        index = (X[:, 1].long().unsqueeze(1) == keys).nonzero(as_tuple=True)
+        # first learn, init memory states
+        new_s = torch.ones_like(state[:, 0])
+        new_s[index[0]] = self.w[index[1]]
+        new_d = self.init_d(X[:, 1])
+        new_d = new_d.clamp(1, 10)
+
         new_s = new_s.clamp(S_MIN, 36500)
         return torch.stack([new_s, new_d], dim=1)
 
@@ -190,9 +195,12 @@ class FSRS(nn.Module):
         """
         :param inputs: shape[seq_len, batch_size, 2]
         """
-        if state is None:
-            state = torch.zeros((inputs.shape[1], 2))
         outputs = []
+        if state is None:
+            state = self.new_state(inputs)
+            inputs = inputs[1:]
+            outputs.append(state)
+
         for X in inputs:
             state = self.step(X, state)
             outputs.append(state)
