@@ -174,7 +174,7 @@ class FSRS(nn.Module):
         new_s = new_s.clamp(S_MIN, 36500)
         return torch.stack([new_s, new_d], dim=1)
 
-    def new_state(self, inputs: Tensor):
+    def init_state(self, inputs: Tensor):
         X = inputs[0]
         state = torch.zeros((inputs.shape[1], 2))
         keys = torch.tensor([1, 2, 3, 4])
@@ -197,7 +197,7 @@ class FSRS(nn.Module):
         """
         outputs = []
         if state is None:
-            state = self.new_state(inputs)
+            state = self.init_state(inputs)
             inputs = inputs[1:]
             outputs.append(state)
 
