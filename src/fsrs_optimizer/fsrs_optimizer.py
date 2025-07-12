@@ -65,6 +65,7 @@ DEFAULT_PARAMETER = [
     0.0912,  # w[18] short term stability
     0.0658,  # w[19] short term stability
     0.1542,  # w[20] forgetting curve decay
+    1.0, # w[21] short term difficulty
 ]
 
 DEFAULT_PARAMS_STDDEV_TENSOR = torch.tensor(
@@ -90,6 +91,7 @@ DEFAULT_PARAMS_STDDEV_TENSOR = torch.tensor(
         0.32,
         0.14,
         0.27,
+        1
     ],
     dtype=torch.float,
 )
@@ -142,8 +144,8 @@ class FSRS(nn.Module):
     def linear_damping(self, delta_d: Tensor, old_d: Tensor) -> Tensor:
         return delta_d * (10 - old_d) / 9
 
-    def next_d(self, state: Tensor, rating: Tensor) -> Tensor:
-        delta_d = -self.w[6] * (rating - 3)
+    def next_d(self, state: Tensor, rating: Tensor, multiplier: Tensor) -> Tensor:
+        delta_d = (-self.w[6] * (rating - 3)) * multiplier
         new_d = state[:, 1] + self.linear_damping(delta_d, state[:, 1])
         new_d = self.mean_reversion(self.init_d(4), new_d)
         return new_d
@@ -184,7 +186,7 @@ class FSRS(nn.Module):
                     self.stability_after_failure(state, r),
                 )
             )
-            new_d = self.next_d(state, X[:, 1])
+            new_d = self.next_d(state, X[:, 1], torch.where(short_term, self.w[21], 1))
             new_d = new_d.clamp(1, 10)
         new_s = new_s.clamp(S_MIN, 36500)
         return torch.stack([new_s, new_d], dim=1)
@@ -235,6 +237,7 @@ class ParameterClipper:
             w[18] = w[18].clamp(0, 2)
             w[19] = w[19].clamp(0, 0.8)
             w[20] = w[20].clamp(0.1, 0.8)
+            w[21] = w[21].clamp(0, 1)
             module.w.data = w
 
 
