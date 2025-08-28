@@ -1105,6 +1105,7 @@ class Optimizer:
         plots = []
         r_s0_default = {str(i): DEFAULT_PARAMETER[i - 1] for i in range(1, 5)}
 
+        decays = []
         for first_rating in ("1", "2", "3", "4"):
             group = self.S0_dataset_group[
                 self.S0_dataset_group["first_rating"] == first_rating
@@ -1148,6 +1149,16 @@ class Optimizer:
             predict_recall = power_forgetting_curve(delta_t, *params)
             rmse = root_mean_squared_error(recall, predict_recall, sample_weight=count)
 
+            def decay_loss(decay):
+                y_pred = power_forgetting_curve(delta_t, stability, -decay)
+                logloss = sum(
+                    -(recall * np.log(y_pred) + (1 - recall) * np.log(1 - y_pred))
+                    * count
+                )
+                l1 = np.abs(stability - init_s0) / 16 if not self.float_delta_t else 0
+                return logloss + l1
+            decays.append(minimize(decay_loss, x0=self.init_w[20], bounds=((0.1, 0.8),)).x[0] * len(group))
+
             if verbose:
                 fig = plt.figure()
                 ax = fig.gca()
@@ -1169,6 +1180,8 @@ class Optimizer:
                 )
                 plots.append(fig)
                 tqdm.write(str(rating_stability))
+
+        self.init_w[20] = sum(decays) / len(self.S0_dataset_group)
 
         for small_rating, big_rating in (
             (1, 2),
