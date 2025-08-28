@@ -1190,7 +1190,7 @@ class Optimizer:
                 -(recall * np.log(y_pred) + (1 - recall) * np.log(1 - y_pred))
                 * count
             )
-            l1 = abs(decay - init_decay) * 16 if not self.float_delta_t else 0
+            l1 = abs(decay - init_decay) * 6 if not self.float_delta_t else 0
             return logloss + l1
 
         self.init_w[20] = minimize(decay_loss, x0=init_decay, bounds=((0.1, 0.8),)).x[0]
