@@ -1105,7 +1105,6 @@ class Optimizer:
         plots = []
         r_s0_default = {str(i): DEFAULT_PARAMETER[i - 1] for i in range(1, 5)}
 
-        decays = []
         for first_rating in ("1", "2", "3", "4"):
             group = self.S0_dataset_group[
                 self.S0_dataset_group["first_rating"] == first_rating
