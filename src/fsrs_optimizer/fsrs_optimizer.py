@@ -1149,16 +1149,6 @@ class Optimizer:
             predict_recall = power_forgetting_curve(delta_t, *params)
             rmse = root_mean_squared_error(recall, predict_recall, sample_weight=count)
 
-            def decay_loss(decay):
-                y_pred = power_forgetting_curve(delta_t, stability, -decay)
-                logloss = sum(
-                    -(recall * np.log(y_pred) + (1 - recall) * np.log(1 - y_pred))
-                    * count
-                )
-                l1 = np.abs(stability - init_s0) / 16 if not self.float_delta_t else 0
-                return logloss + l1
-            decays.append(minimize(decay_loss, x0=self.init_w[20], bounds=((0.1, 0.8),)).x[0] * len(group))
-
             if verbose:
                 fig = plt.figure()
                 ax = fig.gca()
@@ -1181,7 +1171,29 @@ class Optimizer:
                 plots.append(fig)
                 tqdm.write(str(rating_stability))
 
-        self.init_w[20] = sum(decays) / len(self.S0_dataset_group)
+        init_decay = 0.2
+        group = self.S0_dataset_group
+
+        delta_t = group["delta_t"]
+        recall = (
+            (group["y"]["mean"] * group["y"]["count"] + average_recall * 1)
+            / (group["y"]["count"] + 1)
+            if not self.float_delta_t
+            else group["y"]["mean"]
+        )
+        count = group["y"]["count"]
+        stability = group["first_rating"].map({str(k):v for k, v in rating_stability.items()})
+
+        def decay_loss(decay):
+            y_pred = power_forgetting_curve(delta_t, stability, -decay)
+            logloss = sum(
+                -(recall * np.log(y_pred) + (1 - recall) * np.log(1 - y_pred))
+                * count
+            )
+            l1 = abs(decay - init_decay) * 16 if not self.float_delta_t else 0
+            return logloss + l1
+
+        self.init_w[20] = minimize(decay_loss, x0=init_decay, bounds=((0.1, 0.8),)).x[0]
 
         for small_rating, big_rating in (
             (1, 2),
