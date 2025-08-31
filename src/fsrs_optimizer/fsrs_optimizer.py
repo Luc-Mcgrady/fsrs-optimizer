@@ -1105,16 +1105,13 @@ class Optimizer:
         plots = []
         r_s0_default = {str(i): DEFAULT_PARAMETER[i - 1] for i in range(1, 5)}
 
-        for first_rating in ("1", "2", "3", "4"):
-            group = self.S0_dataset_group[
-                self.S0_dataset_group["first_rating"] == first_rating
-            ]
+        def find_optimal_stability(group):
             if group.empty:
                 if verbose:
                     tqdm.write(
                         f"Not enough data for first rating {first_rating}. Expected at least 1, got 0."
                     )
-                continue
+                return
             delta_t = group["delta_t"]
             recall = (
                 (group["y"]["mean"] * group["y"]["count"] + average_recall * 1)
@@ -1143,9 +1140,36 @@ class Optimizer:
             )
             params = res.x
             stability = params[0]
+            return stability, count, delta_t, recall
+
+        def find_optimal_stability_row(row):
+            delta_t = np.array(row["delta_t"])
+            recall = row[("y", "mean")]
+            count = row[("y", "count")]
+
+            init_s0 = r_s0_default["3"]
+
+            def loss(stability):
+                print(f"{delta_t=}, {stability=}")
+                y_pred = power_forgetting_curve(delta_t, stability)
+                logloss = -(recall * y_pred + (1 - recall) * np.log(1 - y_pred)) * count
+                l1 = np.abs(stability - init_s0) / 16 if not self.float_delta_t else 0
+                return logloss + l1
+
+            res = minimize(loss, x0=init_s0, bounds=((S_MIN, 36500),))
+            return res.x[0]
+
+        for first_rating in ("1", "2", "3", "4"):
+            group = self.S0_dataset_group[
+                self.S0_dataset_group["first_rating"] == first_rating
+            ]
+            ret = find_optimal_stability(group)
+            if ret is None:
+                continue
+            stability, count, delta_t, recall = ret
             rating_stability[int(first_rating)] = stability
             rating_count[int(first_rating)] = sum(count)
-            predict_recall = power_forgetting_curve(delta_t, *params)
+            predict_recall = power_forgetting_curve(delta_t, stability)
             rmse = root_mean_squared_error(recall, predict_recall, sample_weight=count)
 
             if verbose:
@@ -1154,7 +1178,7 @@ class Optimizer:
                 ax.plot(delta_t, recall, label="Exact")
                 ax.plot(
                     np.linspace(0, 30),
-                    power_forgetting_curve(np.linspace(0, 30), *params),
+                    power_forgetting_curve(np.linspace(0, 30), stability),
                     label=f"Weighted fit (RMSE: {rmse:.4f})",
                 )
                 count_percent = np.array([x / sum(count) for x in count])
@@ -1170,9 +1194,23 @@ class Optimizer:
                 plots.append(fig)
                 tqdm.write(str(rating_stability))
 
-        init_decay = 0.2
-        group = self.S0_dataset_group
+        r_history_list = dataset.groupby("card_id", group_keys=False)["rating"].apply(
+            lambda x: list(accumulate(([[i] for i in x])))
+        )
+        dataset["r_history"] = [
+            ",".join(map(str, item[:-1])) for sublist in r_history_list for item in sublist
+        ]
+        self.decay_pretrain_groups = self.dataset[(self.dataset["i"] < 4) & (self.dataset["i"] > 1)].groupby(by=["r_history", "delta_t"], group_keys=False).agg({"y": ["mean", "count"]}).reset_index()
 
+        init_decay = 0.5
+        group = self.decay_pretrain_groups
+        #print(group)
+
+        r_history_stabilities = {}
+        for history in group["r_history"].unique():
+            r_history_stabilities[history] = find_optimal_stability(group[group["r_history"] == history])[0]
+
+        stability = group["r_history"].map(r_history_stabilities)
         delta_t = group["delta_t"]
         recall = (
             (group["y"]["mean"] * group["y"]["count"] + average_recall * 1)
@@ -1181,7 +1219,6 @@ class Optimizer:
             else group["y"]["mean"]
         )
         count = group["y"]["count"]
-        stability = group["first_rating"].map({str(k):v for k, v in rating_stability.items()})
 
         def decay_loss(decay):
             y_pred = power_forgetting_curve(delta_t, stability, -decay)
@@ -1189,8 +1226,8 @@ class Optimizer:
                 -(recall * np.log(y_pred) + (1 - recall) * np.log(1 - y_pred))
                 * count
             )
-            l1 = abs(decay - init_decay) * 6 if not self.float_delta_t else 0
-            return logloss + l1
+            # l1 = abs(decay - init_decay) * 6 if not self.float_delta_t else 0
+            return logloss # + l1
 
         self.init_w[20] = minimize(decay_loss, x0=init_decay, bounds=((0.1, 0.8),)).x[0]
 
