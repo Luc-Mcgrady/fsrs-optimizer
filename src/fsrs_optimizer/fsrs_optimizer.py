@@ -1202,7 +1202,7 @@ class Optimizer:
             for sublist in r_history_list
             for item in sublist
         ]
-        MAX_REVIEW_COUNT = 6
+        MAX_REVIEW_COUNT = 10
         self.decay_pretrain_groups = (
             self.dataset[
                 (self.dataset["i"] <= MAX_REVIEW_COUNT) & (self.dataset["i"] > 1)
