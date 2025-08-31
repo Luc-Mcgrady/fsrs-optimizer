@@ -1198,18 +1198,29 @@ class Optimizer:
             lambda x: list(accumulate(([[i] for i in x])))
         )
         dataset["r_history"] = [
-            ",".join(map(str, item[:-1])) for sublist in r_history_list for item in sublist
+            ",".join(map(str, item[:-1]))
+            for sublist in r_history_list
+            for item in sublist
         ]
         MAX_REVIEW_COUNT = 6
-        self.decay_pretrain_groups = self.dataset[(self.dataset["i"] <= MAX_REVIEW_COUNT) & (self.dataset["i"] > 1)].groupby(by=["r_history", "delta_t"], group_keys=False).agg({"y": ["mean", "count"]}).reset_index()
+        self.decay_pretrain_groups = (
+            self.dataset[
+                (self.dataset["i"] <= MAX_REVIEW_COUNT) & (self.dataset["i"] > 1)
+            ]
+            .groupby(by=["r_history", "delta_t"], group_keys=False)
+            .agg({"y": ["mean", "count"]})
+            .reset_index()
+        )
 
         init_decay = 0.5
         group = self.decay_pretrain_groups
-        #print(group)
+        # print(group)
 
         r_history_stabilities = {}
         for history in group["r_history"].unique():
-            r_history_stabilities[history] = find_optimal_stability(group[group["r_history"] == history])[0]
+            r_history_stabilities[history] = find_optimal_stability(
+                group[group["r_history"] == history]
+            )[0]
 
         stability = group["r_history"].map(r_history_stabilities)
         delta_t = group["delta_t"]
@@ -1224,11 +1235,10 @@ class Optimizer:
         def decay_loss(decay):
             y_pred = power_forgetting_curve(delta_t, stability, -decay)
             logloss = sum(
-                -(recall * np.log(y_pred) + (1 - recall) * np.log(1 - y_pred))
-                * count
+                -(recall * np.log(y_pred) + (1 - recall) * np.log(1 - y_pred)) * count
             )
             # l1 = abs(decay - init_decay) * 6 if not self.float_delta_t else 0
-            return logloss # + l1
+            return logloss  # + l1
 
         self.init_w[20] = minimize(decay_loss, x0=init_decay, bounds=((0.1, 0.8),)).x[0]
 
