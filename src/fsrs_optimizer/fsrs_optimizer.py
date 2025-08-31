@@ -1200,7 +1200,8 @@ class Optimizer:
         dataset["r_history"] = [
             ",".join(map(str, item[:-1])) for sublist in r_history_list for item in sublist
         ]
-        self.decay_pretrain_groups = self.dataset[(self.dataset["i"] < 4) & (self.dataset["i"] > 1)].groupby(by=["r_history", "delta_t"], group_keys=False).agg({"y": ["mean", "count"]}).reset_index()
+        MAX_REVIEW_COUNT = 6
+        self.decay_pretrain_groups = self.dataset[(self.dataset["i"] <= MAX_REVIEW_COUNT) & (self.dataset["i"] > 1)].groupby(by=["r_history", "delta_t"], group_keys=False).agg({"y": ["mean", "count"]}).reset_index()
 
         init_decay = 0.5
         group = self.decay_pretrain_groups
